@@ -80,3 +80,14 @@ private let room = Target(.groupedLight, "g1")
     await q.waitUntilIdle()
     #expect(await rec.failures == 1)
 }
+
+@Test func manyLightsShareTheBridgesBudget() async {
+    let rec = Recorder()
+    let q = CommandQueue(gap: { _ in .milliseconds(10) }, lightSpacing: .milliseconds(50),
+                         send: { await rec.add($0, $1) }, onError: { _, _ in })
+    let start = ContinuousClock.now
+    for i in 1...5 { await q.enqueue(Command(brightness: 50), for: Target(.light, "l\(i)")) }
+    await q.waitUntilIdle()
+    #expect(await rec.sent.count == 5)                         // every light got it
+    #expect(ContinuousClock.now - start >= .milliseconds(190)) // but spaced out, not all at once
+}

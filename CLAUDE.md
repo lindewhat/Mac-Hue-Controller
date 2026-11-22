@@ -24,9 +24,12 @@ Tests only: `swift test`.
 - SwiftUI `MenuBarExtra(.window)` for the panel, not an `NSMenu`: views update in place, so nothing is rebuilt mid-click (the Sonos menu needed fixes for exactly that).
 - Clicks are never dropped: no "busy" guards. Every change goes through one ordered pipe into `CommandQueue`, which keeps one lane per light/room/scene, sends the first command at once and merges later ones (newest value wins, nothing asked for is lost). Gaps: ~110 ms per light, ~1 s per room/zone (the bridge's limits). A "busy" answer (429) is retried.
 - Switches decide from the real state in the store (`!isOn`), never from the control's own value. A room is "on" if any light in it is on; no half-on state.
-- Sliders never jump under the finger: while dragging they show the user's value; after release they hold it up to 1.5 s until the bridge confirms.
+- Sliders never jump under the finger: while dragging they show the user's value and send whole numbers only; after release the store's shield keeps the value until the bridge has caught up.
 - The bridge is the source of truth: optimistic updates, then live events confirm; any failed change re-reads everything; the panel re-reads when opened if older than 5 s; the stream reconnects with growing pauses and re-reads after reconnecting.
-- Room brightness/colour go to the room's `grouped_light` (absolute values, so every light gets the same level).
+- Room brightness/warmth/colour change only the lights that are on (lights that are off stay off). Only when the whole room is off does dragging turn the room on. Lit lights get per-light commands; a big room (>4 lights) that is entirely on gets one `grouped_light` command. All light commands share one ~10/s budget in `CommandQueue`.
+- Shields (HueStore): for 3 s after a light is changed here, the bridge's reports for it are held back, then the latest one is applied. This stops switches and sliders flicking back to in-between values the bridge reports late.
+- Each light is its own observable `LightState`, so a change redraws only the rows showing that light.
+- The panel looks like a native menu (Wi-Fi menu as reference): see-through `.menu` material, plain rows, thin inset separators, small grey section headings, menu-style rows at the bottom. `open -a "Mac Hue Control" --args --panel-preview` shows the panel in a normal window for checking its look (the real menu bar isn't capturable).
 - Security: the bridge has its own certificate. `BridgeTrust` remembers its fingerprint at pairing (pressing the link button proves it's the right bridge) and accepts only that certificate, only from the bridge's address. If it changes, the app asks to set up again.
 - The app key lives in the Keychain. Bridge id/name/address/certificate fingerprint in UserDefaults (`savedBridge`).
 - If the bridge's address changes (router gave it a new one), the app searches for the same bridge id and reconnects.

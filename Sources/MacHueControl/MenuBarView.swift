@@ -2,8 +2,8 @@ import AppKit
 import HueKit
 import SwiftUI
 
-/// The panel that opens from the menu bar icon: every room and zone with a switch and a brightness slider.
-/// Each one opens up to show its scenes and single lights.
+/// The panel that opens from the menu bar icon: every room and zone as a card with a switch and a brightness
+/// slider. Each card opens up to show its scenes and single lights.
 struct MenuBarView: View {
     @Environment(HueStore.self) private var store
     @Environment(\.openWindow) private var openWindow
@@ -13,24 +13,25 @@ struct MenuBarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider()
             if store.status == .connected {
                 content
             } else {
+                MenuSeparator()
                 StatusPanel(compact: true)
-                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
             }
             if let message = store.message {
-                Divider()
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .padding(.horizontal, 16).padding(.bottom, 8)
             }
-            Divider()
+            MenuSeparator()
             footer
         }
-        .frame(width: 340)
+        .frame(width: 320)
+        .background(NativeMenuBackground())
         .onAppear { store.refreshIfStale() }
     }
 
@@ -42,21 +43,24 @@ struct MenuBarView: View {
                 Circle().fill(.green).frame(width: 7, height: 7).accessibilityLabel("Connected")
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 6)
     }
 
     private var content: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 0) {
                 if store.rooms.isEmpty && store.zones.isEmpty {
+                    MenuSeparator()
                     Text("No rooms or zones yet. Set them up in the Hue app on your phone.")
-                        .font(.callout).foregroundStyle(.secondary).padding(14)
+                        .font(.callout).foregroundStyle(.secondary)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
                 }
                 section("Rooms", store.rooms)
                 section("Zones", store.zones)
             }
-            .padding(.vertical, 6)
+            .padding(.bottom, 4)
         }
+        .scrollIndicators(.automatic)
         .frame(maxHeight: 560)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -64,10 +68,11 @@ struct MenuBarView: View {
     @ViewBuilder
     private func section(_ title: String, _ groups: [LightGroup]) -> some View {
         if !groups.isEmpty {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
+            MenuSeparator()
+            Text(title)
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 14).padding(.top, 8)
+                .padding(.horizontal, 14).padding(.top, 2).padding(.bottom, 4)
             ForEach(groups) { group in
                 MenuGroupRow(group: group, isExpanded: Binding(
                     get: { expanded.contains(group.id) },
@@ -77,28 +82,29 @@ struct MenuBarView: View {
     }
 
     private var footer: some View {
-        HStack {
-            Button("Open Hue Control…") {
+        VStack(spacing: 0) {
+            MenuItemButton(title: "Open Hue Control…") {
                 openWindow(id: "main")
                 NSApp.activate()
             }
-            Spacer()
-            Button {
+            MenuItemButton(title: "Settings…") {
                 openSettings()
                 NSApp.activate()
-            } label: { Image(systemName: "gearshape") }
-            .help("Settings")
-            Button("Quit") { NSApp.terminate(nil) }
+            }
+            MenuItemButton(title: "Quit Mac Hue Control") { NSApp.terminate(nil) }
         }
-        .buttonStyle(.borderless)
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .padding(.horizontal, 5).padding(.vertical, 5)
     }
 }
 
+/// One room or zone: name, arrow, switch and brightness, laid out like a row in a native menu.
 private struct MenuGroupRow: View {
     @Environment(HueStore.self) private var store
     let group: LightGroup
     @Binding var isExpanded: Bool
+
+    /// Everything inside the card lines up on this inset (right after the arrow).
+    private let inset: CGFloat = 22
 
     var body: some View {
         let isOn = store.isOn(group)
@@ -107,28 +113,31 @@ private struct MenuGroupRow: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
                 } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                        .frame(width: 14, height: 14)
-                        .contentShape(Rectangle())
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                            .frame(width: 14)
+                        Text(group.name).font(.body.weight(.medium)).lineLimit(1)
+                        Spacer(minLength: 8)
+                    }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel(isExpanded ? "Hide lights" : "Show lights")
-
-                Text(group.name).font(.body.weight(.medium)).lineLimit(1)
-                Spacer()
+                .accessibilityLabel(isExpanded ? "Hide \(group.name)'s lights" : "Show \(group.name)'s lights")
                 PowerSwitch(isOn: isOn, toggle: { store.toggle(group) }, size: .mini)
             }
             if store.canDim(group) {
                 BrightnessSlider(value: store.brightness(group),
                                  onChange: { store.setBrightness($0, for: group) }, onDim: isOn)
                     .controlSize(.small)
-                    .padding(.leading, 22)
+                    .padding(.leading, inset)
             }
             if isExpanded {
-                expandedContent.padding(.leading, 22)
+                expandedContent
+                    .padding(.leading, inset)
+                    .padding(.top, 4)
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 6)
@@ -137,30 +146,43 @@ private struct MenuGroupRow: View {
     @ViewBuilder
     private var expandedContent: some View {
         let scenes = store.scenes(in: group)
-        if !scenes.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            if !scenes.isEmpty {
+                FlowLayout(spacing: 6, lineSpacing: 6) {
                     ForEach(scenes) { scene in
                         Button(scene.name) { store.recall(scene) }
                             .buttonStyle(SceneChipStyle(active: scene.isActive))
                     }
                 }
             }
+            ForEach(group.lightIDs, id: \.self) { id in
+                if let state = store.lightStates[id] {
+                    MenuLightRow(state: state)
+                }
+            }
         }
-        ForEach(store.lights(in: group)) { light in
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 8) {
-                    Circle().fill(light.displayColor).frame(width: 10, height: 10)
-                    Text(light.name).font(.callout).lineLimit(1)
-                    Spacer()
-                    PowerSwitch(isOn: light.on.on, toggle: { store.toggle(light) }, size: .mini)
-                }
-                if light.supportsDimming {
-                    BrightnessSlider(value: light.dimming?.brightness ?? 0,
-                                     onChange: { store.setBrightness($0, for: light) }, onDim: light.on.on)
-                        .controlSize(.mini)
-                        .padding(.leading, 18)
-                }
+    }
+}
+
+/// One light inside an opened card. It watches only its own light, so dragging another slider doesn't redraw it.
+private struct MenuLightRow: View {
+    @Environment(HueStore.self) private var store
+    let state: LightState
+
+    var body: some View {
+        let light = state.light
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Circle().fill(light.displayColor).frame(width: 10, height: 10)
+                Text(light.name).font(.callout).lineLimit(1)
+                Spacer(minLength: 8)
+                PowerSwitch(isOn: light.on.on, toggle: { store.toggle(light) }, size: .mini)
+            }
+            if light.supportsDimming {
+                BrightnessSlider(value: light.dimming?.brightness ?? 0,
+                                 onChange: { store.setBrightness($0, for: light) }, onDim: light.on.on)
+                    .controlSize(.mini)
+                    .padding(.leading, 18)
             }
         }
     }
@@ -231,5 +253,36 @@ struct StatusPanel: View {
 func openLocalNetworkSettings() {
     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork") {
         NSWorkspace.shared.open(url)
+    }
+}
+
+/// A thin line between sections, inset like the ones in the system's own menus.
+struct MenuSeparator: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.12))
+            .frame(height: 1)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 5)
+    }
+}
+
+/// A plain clickable row that highlights on hover, like "Wi-Fi Settings…" in the system menu.
+struct MenuItemButton: View {
+    let title: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(hovering ? Color.primary.opacity(0.1) : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }

@@ -2,10 +2,23 @@ import AppKit
 import HueKit
 import Observation
 
+/// One light's current state. Each light is its own observable object, so a change to one light only redraws the
+/// rows that show it, not the whole panel (that kept sliders smooth while dragging).
+@MainActor @Observable
+final class LightState {
+    var light: Light
+    init(_ light: Light) { self.light = light }
+}
+
 /// Everything the menu and window show, kept in step with the bridge.
 ///
 /// The bridge is the source of truth: clicks change what's shown at once (so the app feels instant), the change is
 /// sent, and the bridge's live updates then confirm or correct it. If a change fails, everything is re-read.
+///
+/// The bridge reports changes a little behind what you do: during and just after a drag it still reports the
+/// in-between values. So for a few seconds after you change a light, its reports are held back ("shielded") instead
+/// of moving the switch or slider back; when the time is up the latest report is applied, so the app always ends up
+/// showing the real state.
 @MainActor @Observable
 final class HueStore {
     enum Status: Equatable {
@@ -14,20 +27,27 @@ final class HueStore {
 
     private(set) var status: Status = .notPaired
     private(set) var bridge: SavedBridge?
-    private(set) var lights: [String: Light] = [:]
+    private(set) var lightStates: [String: LightState] = [:]
     private(set) var scenes: [String: Scene] = [:]
     private(set) var rooms: [LightGroup] = []
     private(set) var zones: [LightGroup] = []
-    /// The last problem with a change, in plain language. Cleared by the next successful read.
+    /// The last problem with a change, in plain language. Cleared by the next change.
     var message: String?
 
-    private var client: HueClient?
-    private var outbox: AsyncStream<(Target, Command)>.Continuation?
-    private var tasks: [Task<Void, Never>] = []
-    private var generation = 0
-    private var lastRefresh: ContinuousClock.Instant?
-    private var refreshSoonTask: Task<Void, Never>?
-    private var lastRelocate: ContinuousClock.Instant?
+    @ObservationIgnored private var client: HueClient?
+    @ObservationIgnored private var outbox: AsyncStream<(Target, Command)>.Continuation?
+    @ObservationIgnored private var tasks: [Task<Void, Never>] = []
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var lastRefresh: ContinuousClock.Instant?
+    @ObservationIgnored private var refreshSoonTask: Task<Void, Never>?
+    @ObservationIgnored private var lastRelocate: ContinuousClock.Instant?
+    @ObservationIgnored private var pendingKey: String?
+
+    // Shields: lights changed here recently, and the bridge's latest word on them, held back until the shield ends.
+    @ObservationIgnored private var shieldUntil: [String: ContinuousClock.Instant] = [:]
+    @ObservationIgnored private var heldTruth: [String: Light] = [:]
+    @ObservationIgnored private var shieldTasks: [String: Task<Void, Never>] = [:]
+    private static let shieldTime: Duration = .seconds(3)
 
     private static let bridgeKey = "savedBridge"
 
@@ -56,9 +76,6 @@ final class HueStore {
         connect()
     }
 
-    /// Keeps the key in memory if the Keychain refused it, so the app still works until it quits.
-    private var pendingKey: String?
-
     /// Forgets the bridge (for "Set up again").
     func forget() {
         disconnect()
@@ -66,7 +83,7 @@ final class HueStore {
         UserDefaults.standard.removeObject(forKey: Self.bridgeKey)
         bridge = nil
         pendingKey = nil
-        lights = [:]; scenes = [:]; rooms = []; zones = []
+        lightStates = [:]; scenes = [:]; rooms = []; zones = []
         message = nil
         status = .notPaired
     }
@@ -117,6 +134,8 @@ final class HueStore {
         client?.close()
         client = nil
         refreshSoonTask?.cancel()
+        shieldTasks.values.forEach { $0.cancel() }
+        shieldTasks = [:]; shieldUntil = [:]; heldTruth = [:]
     }
 
     /// Keeps the live update stream open, reconnecting with growing pauses if it drops.
@@ -183,11 +202,37 @@ final class HueStore {
     }
 
     private func apply(_ s: Snapshot) {
-        lights = Dictionary(s.lights.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        scenes = Dictionary(s.scenes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var states = lightStates
+        var changedSet = false
+        let incoming = Set(s.lights.map(\.id))
+        for light in s.lights {
+            if let state = states[light.id] {
+                receive(light, into: state)
+            } else {
+                states[light.id] = LightState(light)
+                changedSet = true
+            }
+        }
+        for id in states.keys where !incoming.contains(id) {
+            states[id] = nil
+            changedSet = true
+        }
+        if changedSet { lightStates = states }
+
+        let newScenes = Dictionary(s.scenes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        if newScenes != scenes { scenes = newScenes }
         let (r, z) = Topology.build(s)
         if r != rooms { rooms = r }
         if z != zones { zones = z }
+    }
+
+    /// The bridge's word on a light: shown at once, unless the light was changed here moments ago.
+    private func receive(_ light: Light, into state: LightState) {
+        if let until = shieldUntil[light.id], until > .now {
+            heldTruth[light.id] = light
+        } else if state.light != light {
+            state.light = light
+        }
     }
 
     private func apply(_ events: [HueEvent], generation gen: Int) {
@@ -202,13 +247,15 @@ final class HueStore {
             for update in event.data {
                 switch update.type {
                 case "light":
-                    if let light = lights[update.id] { lights[update.id] = update.applied(to: light) }
-                    else { needsRefresh = true }
+                    guard let state = lightStates[update.id] else { needsRefresh = true; continue }
+                    // Updates only list what changed, so build on the newest known bridge state.
+                    let base = heldTruth[update.id] ?? state.light
+                    receive(update.applied(to: base), into: state)
                 case "scene":
                     if var scene = scenes[update.id] {
                         if let status = update.status { scene.status = status }
                         if let metadata = update.metadata { scene.metadata.name = metadata.name; needsRefresh = true }
-                        scenes[update.id] = scene
+                        if scenes[update.id] != scene { scenes[update.id] = scene }
                     }
                 case "room", "zone", "device":
                     needsRefresh = true // renamed, or lights moved between rooms
@@ -255,12 +302,38 @@ final class HueStore {
         } else {
             message = hue.localizedDescription
         }
-        await refresh() // put back what's really true
+        // Put back what's really true: drop the shields so the fresh read shows at once.
+        for id in Array(shieldUntil.keys) { endShield(id) }
+        await refresh()
+    }
+
+    // MARK: - Shields
+
+    private func shield(_ id: String) {
+        shieldUntil[id] = .now + Self.shieldTime
+        guard shieldTasks[id] == nil else { return }
+        shieldTasks[id] = Task { [weak self] in
+            while let until = self?.shieldUntil[id], until > .now {
+                try? await Task.sleep(for: until - .now)
+                if Task.isCancelled { return }
+            }
+            self?.endShield(id)
+        }
+    }
+
+    private func endShield(_ id: String) {
+        shieldTasks[id]?.cancel()
+        shieldTasks[id] = nil
+        shieldUntil[id] = nil
+        if let truth = heldTruth.removeValue(forKey: id), let state = lightStates[id], state.light != truth {
+            state.light = truth
+        }
     }
 
     // MARK: - What the views ask
 
-    func lights(in group: LightGroup) -> [Light] { group.lightIDs.compactMap { lights[$0] } }
+    func light(_ id: String) -> Light? { lightStates[id]?.light }
+    func lights(in group: LightGroup) -> [Light] { group.lightIDs.compactMap { lightStates[$0]?.light } }
     func scenes(in group: LightGroup) -> [Scene] { group.sceneIDs.compactMap { scenes[$0] } }
 
     /// A room counts as on when any of its lights is on (no half-on state, so a click always does the obvious thing).
@@ -279,7 +352,7 @@ final class HueStore {
     func canColor(_ group: LightGroup) -> Bool { lights(in: group).contains(where: \.supportsColor) }
     func canWhite(_ group: LightGroup) -> Bool { lights(in: group).contains(where: \.supportsWhiteTemperature) }
 
-    var anyLightOn: Bool { lights.values.contains { $0.on.on } }
+    var anyLightOn: Bool { lightStates.values.contains { $0.light.on.on } }
 
     /// The white range the room's lights share (for the temperature slider).
     func mirekRange(_ group: LightGroup) -> ClosedRange<Int> {
@@ -288,74 +361,114 @@ final class HueStore {
         return (schemas.map(\.mirekMinimum).min() ?? 153)...(schemas.map(\.mirekMaximum).max() ?? 500)
     }
 
-    // MARK: - Changing things
+    // MARK: - Changing a room or zone
 
     func toggle(_ group: LightGroup) {
         // Decide from what's really on, never from the switch's own state (a lesson from the Sonos app).
         let on = !isOn(group)
-        update(group) { $0.on.on = on }
-        send(Command(on: on), to: group)
+        for light in lights(in: group) { change(light.id) { $0.on.on = on } }
+        sendWhole(Command(on: on), to: group)
     }
 
     func setBrightness(_ value: Double, for group: LightGroup) {
-        let v = min(max(value, 1), 100)
-        update(group) { l in
-            guard l.supportsDimming else { return }
-            l.on.on = true
-            l.dimming?.brightness = v
-        }
-        send(Command(on: true, brightness: v), to: group)
+        let v = min(max(value.rounded(), 1), 100)
+        adjust(group, supports: \.supportsDimming,
+               change: { $0.dimming?.brightness = v },
+               command: { _ in Command(brightness: v) })
     }
 
     func setColor(_ xy: XY, for group: LightGroup) {
-        update(group) { l in
-            guard let color = l.color else { return }
-            l.on.on = true
-            l.color?.xy = ColorConversion.clamp(xy, to: color.gamut ?? .c)
-            l.colorTemperature?.mirek = nil
-            l.colorTemperature?.mirekValid = false
-        }
-        send(Command(on: true, xy: xy), to: group)
+        adjust(group, supports: \.supportsColor,
+               change: { l in
+                   let gamut = l.color?.gamut ?? .c
+                   l.color?.xy = ColorConversion.clamp(xy, to: gamut)
+                   l.colorTemperature?.mirek = nil
+                   l.colorTemperature?.mirekValid = false
+               },
+               command: { l in Command(xy: ColorConversion.clamp(xy, to: l.color?.gamut ?? .c)) })
     }
 
     func setMirek(_ mirek: Int, for group: LightGroup) {
-        update(group) { l in
-            guard let schema = l.colorTemperature?.mirekSchema ?? (l.colorTemperature != nil ? .standard : nil) else { return }
-            l.on.on = true
-            l.colorTemperature?.mirek = min(max(mirek, schema.mirekMinimum), schema.mirekMaximum)
-            l.colorTemperature?.mirekValid = true
+        func fitted(_ l: Light) -> Int {
+            let s = l.colorTemperature?.mirekSchema ?? .standard
+            return min(max(mirek, s.mirekMinimum), s.mirekMaximum)
         }
-        send(Command(on: true, mirek: mirek), to: group)
+        adjust(group, supports: \.supportsWhiteTemperature,
+               change: { l in
+                   let m = fitted(l)
+                   l.colorTemperature?.mirek = m
+                   l.colorTemperature?.mirekValid = true
+               },
+               command: { l in Command(mirek: fitted(l)) })
     }
 
+    /// Brightness, colour or white for a room:
+    /// - room on: only the lights that are on change; lights that are off stay off.
+    /// - room completely off: the whole room turns on with the new setting.
+    /// Lights that are on get the change one by one (sharing the bridge's speed limit). Only when a big room is
+    /// entirely on does it go as one whole-room command, which the bridge handles better for many lights.
+    private func adjust(_ group: LightGroup, supports: (Light) -> Bool,
+                        change: (inout Light) -> Void, command: (Light) -> Command) {
+        let all = lights(in: group)
+        let capable = all.filter(supports)
+        guard !capable.isEmpty else { return }
+        let lit = capable.filter(\.on.on)
+
+        if lit.isEmpty {
+            // The whole room was off: turn it on with this setting.
+            for l in all {
+                let fits = supports(l)
+                self.change(l.id) { if fits { change(&$0) }; $0.on.on = true }
+            }
+            var c = command(capable[0])
+            c.on = OnState(on: true)
+            sendWhole(c, to: group)
+            return
+        }
+
+        for l in lit { self.change(l.id) { change(&$0) } }
+        let everythingOn = all.allSatisfy(\.on.on) && lit.count == capable.count
+        if everythingOn && lit.count > 4, group.groupedLightID != nil {
+            sendWhole(command(lit[0]), to: group)
+        } else {
+            for l in lit { enqueue(command(l), Target(.light, l.id)) }
+        }
+    }
+
+    // MARK: - Changing one light
+
     func toggle(_ light: Light) {
-        let on = !(lights[light.id]?.on.on ?? light.on.on)
-        lights[light.id]?.on.on = on
+        let on = !(self.light(light.id)?.on.on ?? light.on.on)
+        change(light.id) { $0.on.on = on }
         enqueue(Command(on: on), Target(.light, light.id))
     }
 
+    /// Dragging one light's own slider turns that light on: you're clearly asking for it.
     func setBrightness(_ value: Double, for light: Light) {
-        let v = min(max(value, 1), 100)
-        lights[light.id]?.on.on = true
-        lights[light.id]?.dimming?.brightness = v
+        let v = min(max(value.rounded(), 1), 100)
+        change(light.id) { $0.on.on = true; $0.dimming?.brightness = v }
         enqueue(Command(on: true, brightness: v), Target(.light, light.id))
     }
 
     func setColor(_ xy: XY, for light: Light) {
         let clamped = ColorConversion.clamp(xy, to: light.color?.gamut ?? .c)
-        lights[light.id]?.on.on = true
-        lights[light.id]?.color?.xy = clamped
-        lights[light.id]?.colorTemperature?.mirek = nil
-        lights[light.id]?.colorTemperature?.mirekValid = false
+        change(light.id) { l in
+            l.on.on = true
+            l.color?.xy = clamped
+            l.colorTemperature?.mirek = nil
+            l.colorTemperature?.mirekValid = false
+        }
         enqueue(Command(on: true, xy: clamped), Target(.light, light.id))
     }
 
     func setMirek(_ mirek: Int, for light: Light) {
         let schema = light.colorTemperature?.mirekSchema ?? .standard
         let m = min(max(mirek, schema.mirekMinimum), schema.mirekMaximum)
-        lights[light.id]?.on.on = true
-        lights[light.id]?.colorTemperature?.mirek = m
-        lights[light.id]?.colorTemperature?.mirekValid = true
+        change(light.id) { l in
+            l.on.on = true
+            l.colorTemperature?.mirek = m
+            l.colorTemperature?.mirekValid = true
+        }
         enqueue(Command(on: true, mirek: m), Target(.light, light.id))
     }
 
@@ -363,15 +476,18 @@ final class HueStore {
         enqueue(Command(recallScene: true), Target(.scene, scene.id))
     }
 
-    private func update(_ group: LightGroup, _ change: (inout Light) -> Void) {
-        for id in group.lightIDs {
-            guard var light = lights[id] else { continue }
-            change(&light)
-            lights[id] = light
-        }
+    // MARK: - Plumbing
+
+    /// Changes what's shown for a light right away and shields it from the bridge's late reports.
+    private func change(_ id: String, _ edit: (inout Light) -> Void) {
+        guard let state = lightStates[id] else { return }
+        var l = state.light
+        edit(&l)
+        shield(id)
+        if l != state.light { state.light = l }
     }
 
-    private func send(_ command: Command, to group: LightGroup) {
+    private func sendWhole(_ command: Command, to group: LightGroup) {
         if let grouped = group.groupedLightID {
             enqueue(command, Target(.groupedLight, grouped))
         } else {
@@ -380,7 +496,7 @@ final class HueStore {
     }
 
     private func enqueue(_ command: Command, _ target: Target) {
-        message = nil
+        if message != nil { message = nil }
         outbox?.yield((target, command))
     }
 }

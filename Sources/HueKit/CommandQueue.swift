@@ -20,6 +20,8 @@ public actor CommandQueue {
     private let onError: ErrorHandler
     private let gap: @Sendable (Target) -> Duration
     private var lanes: [Target: Lane] = [:]
+    private let lightSpacing: Duration
+    private var nextLightSlot: ContinuousClock.Instant = .now
 
     public static let defaultGap: @Sendable (Target) -> Duration = { target in
         switch target.kind {
@@ -30,8 +32,10 @@ public actor CommandQueue {
     }
 
     public init(gap: @escaping @Sendable (Target) -> Duration = CommandQueue.defaultGap,
+                lightSpacing: Duration = .milliseconds(100),
                 send: @escaping Sender, onError: @escaping ErrorHandler) {
         self.gap = gap
+        self.lightSpacing = lightSpacing
         self.send = send
         self.onError = onError
     }
@@ -55,9 +59,16 @@ public actor CommandQueue {
 
     private func drain(_ target: Target) async {
         while true {
-            guard let wait = lanes[target]?.nextAllowed else { return }
+            guard let laneWait = lanes[target]?.nextAllowed else { return }
+            var slot = max(laneWait, ContinuousClock.now)
+            if target.kind == .light {
+                // All lights share one budget (about 10 commands a second for the whole bridge), so a room's worth
+                // of lights changing at once doesn't overload it and make everything lag. Book the next free slot.
+                slot = max(slot, nextLightSlot)
+                nextLightSlot = slot + lightSpacing
+            }
             let now = ContinuousClock.now
-            if wait > now { try? await Task.sleep(for: wait - now) }
+            if slot > now { try? await Task.sleep(for: slot - now) }
 
             guard let command = lanes[target]?.pending else {
                 lanes[target]?.worker = nil

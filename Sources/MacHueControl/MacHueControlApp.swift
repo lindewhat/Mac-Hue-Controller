@@ -37,7 +37,18 @@ struct MacHueControlApp: App {
         Settings {
             SettingsView().environment(store)
         }
+
+        // For checking the panel's look during development: `open -a "Mac Hue Control" --args --panel-preview`
+        // shows the menu bar panel in an ordinary window. Never shown otherwise.
+        Window("Panel preview", id: "panel-preview") {
+            MenuBarView().environment(store)
+        }
+        .windowResizability(.contentSize)
+        .defaultLaunchBehavior(Self.panelPreview ? .presented : .suppressed)
+        .commandsRemoved()
     }
+
+    private static let panelPreview = CommandLine.arguments.contains("--panel-preview")
 }
 
 /// The menu bar icon. It is always on screen, so it is also what opens the window when the app is opened again.

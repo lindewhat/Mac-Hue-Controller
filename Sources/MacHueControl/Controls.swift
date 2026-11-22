@@ -1,3 +1,4 @@
+import AppKit
 import HueKit
 import SwiftUI
 
@@ -20,15 +21,15 @@ extension Light {
 /// A brightness slider that never jumps under your finger.
 ///
 /// While dragging it shows your own value, whatever the bridge reports meanwhile (a lesson from the Sonos app's
-/// menu, which rebuilt itself mid-click). After you let go it keeps your value for a moment, until the bridge
-/// confirms it, so it doesn't flick back to an in-between value.
+/// menu, which rebuilt itself mid-click). Only whole-number changes are sent. After you let go, the store holds
+/// your value until the bridge has caught up (see the shields in HueStore), so it doesn't flick back.
 struct BrightnessSlider: View {
     let value: Double
     let onChange: (Double) -> Void
     var onDim: Bool = true
 
     @State private var dragValue: Double?
-    @State private var settleTask: Task<Void, Never>?
+    @State private var lastSent: Double?
 
     var body: some View {
         Slider(
@@ -36,31 +37,25 @@ struct BrightnessSlider: View {
                 get: { dragValue ?? value },
                 set: { new in
                     dragValue = new
-                    onChange(new)
+                    send(new)
                 }),
             in: 1...100,
             onEditingChanged: { editing in
-                settleTask?.cancel()
-                if editing {
-                    dragValue = dragValue ?? value
-                } else {
-                    if let v = dragValue { onChange(v) }
-                    settleTask = Task {
-                        try? await Task.sleep(for: .seconds(1.5))
-                        if !Task.isCancelled { dragValue = nil }
-                    }
+                if !editing {
+                    if let v = dragValue { send(v) }
+                    dragValue = nil
+                    lastSent = nil
                 }
             })
-        .onChange(of: value) { _, new in
-            // The bridge confirmed (close enough to) what was set: show its value again.
-            if let d = dragValue, settleTask != nil, abs(d - new) < 1.5 {
-                settleTask?.cancel()
-                settleTask = nil
-                dragValue = nil
-            }
-        }
         .opacity(onDim ? 1 : 0.55)
         .accessibilityLabel("Brightness")
+    }
+
+    private func send(_ v: Double) {
+        let rounded = min(max(v.rounded(), 1), 100)
+        guard rounded != lastSent else { return }
+        lastSent = rounded
+        onChange(rounded)
     }
 }
 
@@ -258,5 +253,74 @@ struct ColorControls: View {
                 .frame(maxWidth: 320)
             }
         }
+    }
+}
+
+/// The see-through grey background macOS uses for its own menus (like the Wi-Fi menu). It also makes the panel's
+/// window itself see-through, otherwise the window paints a solid dark colour behind it.
+struct NativeMenuBackground: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = SeeThroughEffectView()
+        view.material = .menu
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+
+    private final class SeeThroughEffectView: NSVisualEffectView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            window.isOpaque = false
+            window.backgroundColor = .clear
+        }
+    }
+}
+
+/// Lays out items left to right and wraps onto a new line when the row is full (used for scene buttons, so none
+/// are cut off at the panel's edge).
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
+        let height = rows.map(\.height).reduce(0, +) + lineSpacing * CGFloat(max(rows.count - 1, 0))
+        let width = rows.map(\.width).max() ?? 0
+        return CGSize(width: proposal.width ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + lineSpacing
+        }
+    }
+
+    private struct Row { var indices: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
+
+    private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = [Row()]
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let needed = rows[rows.count - 1].indices.isEmpty ? size.width : rows[rows.count - 1].width + spacing + size.width
+            if needed > width && !rows[rows.count - 1].indices.isEmpty {
+                rows.append(Row())
+            }
+            var row = rows[rows.count - 1]
+            row.width = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.indices.append(index)
+            rows[rows.count - 1] = row
+        }
+        return rows.filter { !$0.indices.isEmpty }
     }
 }
