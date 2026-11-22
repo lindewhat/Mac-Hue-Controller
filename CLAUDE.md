@@ -36,6 +36,7 @@ Tests only: `swift test`.
 - The app key lives in the Keychain. Bridge id/name/address/certificate fingerprint in UserDefaults (`savedBridge`).
 - If the bridge's address changes (router gave it a new one), the app searches for the same bridge id and reconnects.
 - Discovery always finishes: its timers hold the search strongly (the Sonos search once never finished because of `[weak self]`). Tested.
+- Window size: each time the window opens, `ControlView` lays out every room/zone out of sight (colour wheel showing, 760 pt content width), takes the tallest, and sizes the window to fit it exactly without scrolling (capped to the screen, top edge kept). Only once per opening, so a size the user picks afterwards stays.
 - Dock icon only while the window is open (activation policy switches); otherwise menu bar only (`LSUIElement`).
 - build.sh assembles the app in $TMPDIR (not the Desktop folder): iCloud/Finder markings there break code signing. It signs with a stable identity (Apple Development) so the Keychain doesn't ask again after every rebuild, and verifies the signature after installing.
 - Privacy: only LAN traffic to the bridge. No analytics, no cloud calls (the meethue.com discovery service is deliberately not used), no logging of room/light names or IPs.

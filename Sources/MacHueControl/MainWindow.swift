@@ -28,6 +28,14 @@ private struct ControlView: View {
     @Environment(HueStore.self) private var store
     @State private var selection: String?
 
+    // Sizing the window to fit: see `fitWindow()`.
+    @State private var window: NSWindow?
+    @State private var detailSize: CGSize = .zero
+    @State private var contentHeights: [String: CGFloat] = [:]
+    @State private var fitted = false
+    /// The detail column's content is never wider than this (see GroupDetailContent).
+    static let contentWidth: CGFloat = 760
+
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
@@ -64,12 +72,58 @@ private struct ControlView: View {
                     Spacer()
                 }
             }
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { detailSize = $0; fitWindow() }
+            .background(alignment: .topLeading) { measurer }
         }
-        .frame(minWidth: 720, minHeight: 520)
+        .frame(minWidth: 720, minHeight: 420)
+        .background(WindowReader { window = $0; fitWindow() })
         .onAppear { if selection == nil { selection = store.rooms.first?.id ?? store.zones.first?.id } }
         .onChange(of: store.rooms) { _, rooms in
             if selection == nil || selectedGroup == nil { selection = rooms.first?.id ?? store.zones.first?.id }
         }
+    }
+
+    private var allGroups: [LightGroup] { store.rooms + store.zones }
+
+    /// Every room and zone laid out out of sight, colour wheel showing, to find the tallest one.
+    private var measurer: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(allGroups) { group in
+                GroupDetailContent(group: group, startInColor: true)
+                    .frame(width: Self.contentWidth)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                        contentHeights[group.id] = height
+                        fitWindow()
+                    }
+            }
+        }
+        .hidden()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// When the window opens, makes it exactly big enough to show the tallest room or zone (colour wheel showing)
+    /// without scrolling, and wide enough for the content. Never taller than the screen. Done once per opening, so
+    /// a size you choose yourself afterwards is left alone.
+    private func fitWindow() {
+        guard !fitted, let window, store.status == .connected, !allGroups.isEmpty,
+              allGroups.allSatisfy({ contentHeights[$0.id] != nil }),
+              detailSize.width > 0, detailSize.height > 0 else { return }
+        fitted = true
+        let tallest = contentHeights.values.max() ?? 0
+        let chromeHeight = window.frame.height - detailSize.height  // title bar and toolbar
+        let chromeWidth = window.frame.width - detailSize.width     // the sidebar
+        let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? .zero
+        let height = min(tallest + chromeHeight, visible.height)
+        let width = min(Self.contentWidth + chromeWidth, visible.width)
+
+        var frame = window.frame
+        frame.origin.y = frame.maxY - height       // keep the top edge where it is
+        frame.size = CGSize(width: width, height: height)
+        if frame.minY < visible.minY { frame.origin.y = visible.minY }
+        if frame.maxX > visible.maxX { frame.origin.x = max(visible.maxX - width, visible.minX) }
+        window.setFrame(frame, display: true, animate: true)
     }
 
     private var selectedGroup: LightGroup? {
@@ -94,84 +148,110 @@ private struct SidebarRow: View {
 }
 
 struct GroupDetailView: View {
+    let group: LightGroup
+
+    var body: some View {
+        ScrollView {
+            GroupDetailContent(group: group)
+                .frame(maxWidth: ControlView.contentWidth)
+                .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+/// Everything shown for one room or zone. Also used, out of sight, to measure how tall the window needs to be.
+private struct GroupDetailContent: View {
     @Environment(HueStore.self) private var store
     let group: LightGroup
+    var startInColor = false
 
     var body: some View {
         let lights = store.lights(in: group)
         let isOn = store.isOn(group)
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                // Header: name and the whole-room switch.
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(group.name).font(.largeTitle.weight(.semibold))
-                        Text("\(group.kind == .room ? "Room" : "Zone") · \(lights.count) light\(lights.count == 1 ? "" : "s")")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    PowerSwitch(isOn: isOn, toggle: { store.toggle(group) }, size: .large)
+        VStack(alignment: .leading, spacing: 24) {
+            // Header: name and the whole-room switch.
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.name).font(.largeTitle.weight(.semibold))
+                    Text("\(group.kind == .room ? "Room" : "Zone") · \(lights.count) light\(lights.count == 1 ? "" : "s")")
+                        .foregroundStyle(.secondary)
                 }
+                Spacer()
+                PowerSwitch(isOn: isOn, toggle: { store.toggle(group) }, size: .large)
+            }
 
-                if store.canDim(group) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "sun.min").foregroundStyle(.secondary)
-                        BrightnessSlider(value: store.brightness(group),
-                                         onChange: { store.setBrightness($0, for: group) }, onDim: isOn)
-                        Image(systemName: "sun.max").foregroundStyle(.secondary)
-                        Text("\(Int(store.brightness(group).rounded()))%")
-                            .monospacedDigit().foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
-                    }
+            if store.canDim(group) {
+                HStack(spacing: 10) {
+                    Image(systemName: "sun.min").foregroundStyle(.secondary)
+                    BrightnessSlider(value: store.brightness(group),
+                                     onChange: { store.setBrightness($0, for: group) }, onDim: isOn)
+                    Image(systemName: "sun.max").foregroundStyle(.secondary)
+                    Text("\(Int(store.brightness(group).rounded()))%")
+                        .monospacedDigit().foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
                 }
+            }
 
-                if store.canColor(group) || store.canWhite(group) {
-                    let first = lights.first { $0.on.on && ($0.supportsColor || $0.supportsWhiteTemperature) }
-                        ?? lights.first { $0.supportsColor || $0.supportsWhiteTemperature }
-                    ColorControls(canColor: store.canColor(group), canWhite: store.canWhite(group),
-                                  xy: first?.color?.xy, mirek: first?.colorTemperature?.mirek,
-                                  mirekRange: store.mirekRange(group),
-                                  whiteModeNow: first?.isInWhiteMode ?? false,
-                                  pickColor: { store.setColor($0, for: group) },
-                                  pickMirek: { store.setMirek($0, for: group) })
-                        .frame(maxWidth: .infinity)
-                        .id(group.id) // a fresh Colour/White choice for each room
-                }
+            if store.canColor(group) || store.canWhite(group) {
+                let first = lights.first { $0.on.on && ($0.supportsColor || $0.supportsWhiteTemperature) }
+                    ?? lights.first { $0.supportsColor || $0.supportsWhiteTemperature }
+                ColorControls(canColor: store.canColor(group), canWhite: store.canWhite(group),
+                              xy: first?.color?.xy, mirek: first?.colorTemperature?.mirek,
+                              mirekRange: store.mirekRange(group),
+                              whiteModeNow: first?.isInWhiteMode ?? false,
+                              pickColor: { store.setColor($0, for: group) },
+                              pickMirek: { store.setMirek($0, for: group) },
+                              startInColor: startInColor)
+                    .frame(maxWidth: .infinity)
+                    .id(group.id) // a fresh Colour/White choice for each room
+            }
 
-                let scenes = store.scenes(in: group)
-                if !scenes.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Scenes").font(.title3.weight(.semibold))
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 10)], spacing: 10) {
-                            ForEach(scenes) { scene in
-                                Button { store.recall(scene) } label: {
-                                    Text(scene.name)
-                                        .lineLimit(1)
-                                        .frame(maxWidth: .infinity, minHeight: 34)
-                                }
-                                .buttonStyle(SceneTileStyle(active: store.isActive(scene)))
+            let scenes = store.scenes(in: group)
+            if !scenes.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Scenes").font(.title3.weight(.semibold))
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 10)], spacing: 10) {
+                        ForEach(scenes) { scene in
+                            Button { store.recall(scene) } label: {
+                                Text(scene.name)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, minHeight: 34)
                             }
+                            .buttonStyle(SceneTileStyle(active: store.isActive(scene)))
                         }
-                    }
-                }
-
-                if !lights.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Lights").font(.title3.weight(.semibold))
-                        VStack(spacing: 0) {
-                            ForEach(Array(lights.enumerated()), id: \.element.id) { index, light in
-                                if index > 0 { Divider() }
-                                LightRow(light: light)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(.background.secondary))
                     }
                 }
             }
-            .padding(24)
-            .frame(maxWidth: 760)
-            .frame(maxWidth: .infinity)
+
+            if !lights.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Lights").font(.title3.weight(.semibold))
+                    VStack(spacing: 0) {
+                        ForEach(Array(lights.enumerated()), id: \.element.id) { index, light in
+                            if index > 0 { Divider() }
+                            LightRow(light: light)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(.background.secondary))
+                }
+            }
         }
+        .padding(24)
+    }
+}
+
+/// Hands over the window a view lives in.
+private struct WindowReader: NSViewRepresentable {
+    let found: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { if let w = view.window { found(w) } }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async { if let w = view.window { found(w) } }
     }
 }
 

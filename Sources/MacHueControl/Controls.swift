@@ -225,12 +225,14 @@ struct ColorControls: View {
     let pickColor: (XY) -> Void
     let pickMirek: (Int) -> Void
     var wheelSize: CGFloat = 220
+    /// Show the colour wheel first, whatever the lights show now (used to measure the tallest layout).
+    var startInColor = false
 
     enum Mode: String, CaseIterable { case color = "Colour", white = "White" }
     @State private var mode: Mode?
 
     var body: some View {
-        let current = mode ?? (canColor && !whiteModeNow ? .color : (canWhite ? .white : .color))
+        let current = mode ?? (canColor && (startInColor || !whiteModeNow) ? .color : (canWhite ? .white : .color))
         VStack(spacing: 14) {
             if canColor && canWhite {
                 Picker("", selection: Binding(get: { current }, set: { mode = $0 })) {
