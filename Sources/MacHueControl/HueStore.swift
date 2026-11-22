@@ -461,19 +461,44 @@ final class HueStore {
         enqueue(Command(mirek: m), Target(.light, light.id))
     }
 
+    /// Puts a scene's settings on the lights that are on; lights that are off stay off (see SceneApply).
     func recall(_ scene: Scene) {
-        enqueue(Command(recallScene: true), Target(.scene, scene.id))
+        var current: [String: Light] = [:]
+        for (id, state) in lightStates { current[id] = state.light }
+        let changes = SceneApply.changes(for: scene, lights: current)
+        for change in changes {
+            self.change(change.lightID, keepScene: true) { $0 = SceneApply.preview($0, after: change.command) }
+            enqueue(change.command, Target(.light, change.lightID))
+        }
+        chosenScene[scene.group.rid] = scene.id
+    }
+
+    /// The scene last chosen here for each room/zone. The bridge doesn't mark a scene as active when its settings
+    /// are sent light by light, so the app remembers it until a light in that room is changed some other way.
+    private(set) var chosenScene: [String: String] = [:]
+
+    func isActive(_ scene: Scene) -> Bool {
+        if let chosen = chosenScene[scene.group.rid] { return chosen == scene.id }
+        return scene.isActive
     }
 
     // MARK: - Plumbing
 
     /// Changes what's shown for a light right away and shields it from the bridge's late reports.
-    private func change(_ id: String, _ edit: (inout Light) -> Void) {
+    private func change(_ id: String, keepScene: Bool = false, _ edit: (inout Light) -> Void) {
         guard let state = lightStates[id] else { return }
+        if !keepScene { forgetChosenScene(containing: id) }
         var l = state.light
         edit(&l)
         shield(id)
         if l != state.light { state.light = l }
+    }
+
+    private func forgetChosenScene(containing lightID: String) {
+        guard !chosenScene.isEmpty else { return }
+        for group in rooms + zones where chosenScene[group.id] != nil && group.lightIDs.contains(lightID) {
+            chosenScene[group.id] = nil
+        }
     }
 
     private func sendWhole(_ command: Command, to group: LightGroup) {

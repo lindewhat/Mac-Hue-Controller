@@ -125,13 +125,62 @@ public struct SceneStatus: Codable, Hashable, Sendable {
     public init(active: String?) { self.active = active }
 }
 
+/// A colour gradient (for gradient light strips): a few colour points along the strip.
+public struct Gradient: Codable, Hashable, Sendable {
+    public struct Point: Codable, Hashable, Sendable {
+        public struct PointColor: Codable, Hashable, Sendable { public var xy: XY }
+        public var color: PointColor
+    }
+    public var points: [Point]
+    public var mode: String?
+}
+
+/// What a scene does to one light.
+public struct SceneAction: Codable, Hashable, Sendable {
+    public struct Values: Codable, Hashable, Sendable {
+        public struct ColorValue: Codable, Hashable, Sendable { public var xy: XY }
+        public struct TemperatureValue: Codable, Hashable, Sendable { public var mirek: Int? }
+        public var on: OnState?
+        public var dimming: Dimming?
+        public var color: ColorValue?
+        public var colorTemperature: TemperatureValue?
+        public var gradient: Gradient?
+
+        public init(on: Bool? = nil, brightness: Double? = nil, xy: XY? = nil, mirek: Int? = nil) {
+            self.on = on.map(OnState.init(on:))
+            self.dimming = brightness.map(Dimming.init(brightness:))
+            self.color = xy.map(ColorValue.init(xy:))
+            self.colorTemperature = mirek.map { TemperatureValue(mirek: $0) }
+        }
+
+        /// Fields in an unexpected shape are ignored rather than losing the whole scene.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            on = try? c.decodeIfPresent(OnState.self, forKey: .on)
+            dimming = try? c.decodeIfPresent(Dimming.self, forKey: .dimming)
+            color = try? c.decodeIfPresent(ColorValue.self, forKey: .color)
+            colorTemperature = try? c.decodeIfPresent(TemperatureValue.self, forKey: .colorTemperature)
+            gradient = try? c.decodeIfPresent(Gradient.self, forKey: .gradient)
+        }
+
+        enum CodingKeys: String, CodingKey { case on, dimming, color, colorTemperature, gradient }
+    }
+
+    public var target: ResourceRef
+    public var action: Values
+    public init(target: ResourceRef, action: Values) { self.target = target; self.action = action }
+}
+
 public struct Scene: Codable, Hashable, Sendable, Identifiable {
     public var id: String
     public var metadata: Metadata
     public var group: ResourceRef
     public var status: SceneStatus?
-    public init(id: String, metadata: Metadata, group: ResourceRef, status: SceneStatus? = nil) {
-        self.id = id; self.metadata = metadata; self.group = group; self.status = status
+    /// The setting for each light in the scene.
+    public var actions: [SceneAction]?
+    public init(id: String, metadata: Metadata, group: ResourceRef, status: SceneStatus? = nil,
+                actions: [SceneAction]? = nil) {
+        self.id = id; self.metadata = metadata; self.group = group; self.status = status; self.actions = actions
     }
     public var name: String { metadata.name }
     public var isActive: Bool { (status?.active ?? "inactive") != "inactive" }

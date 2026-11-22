@@ -148,7 +148,7 @@ struct GroupDetailView: View {
                                         .lineLimit(1)
                                         .frame(maxWidth: .infinity, minHeight: 34)
                                 }
-                                .buttonStyle(SceneTileStyle(active: scene.isActive))
+                                .buttonStyle(SceneTileStyle(active: store.isActive(scene)))
                             }
                         }
                     }

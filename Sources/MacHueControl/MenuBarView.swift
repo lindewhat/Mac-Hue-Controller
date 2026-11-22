@@ -160,7 +160,7 @@ private struct MenuGroupRow: View {
                 FlowLayout(spacing: 6, lineSpacing: 6) {
                     ForEach(scenes) { scene in
                         Button(scene.name) { store.recall(scene) }
-                            .buttonStyle(SceneChipStyle(active: scene.isActive))
+                            .buttonStyle(SceneChipStyle(active: store.isActive(scene)))
                     }
                 }
             }

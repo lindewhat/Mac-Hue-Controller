@@ -21,6 +21,7 @@ public struct Command: Encodable, Hashable, Sendable {
     public var color: ColorValue?
     public var colorTemperature: MirekValue?
     public var recall: Recall?
+    public var gradient: Gradient?
 
     public init(on: Bool? = nil, brightness: Double? = nil, xy: XY? = nil, mirek: Int? = nil, recallScene: Bool = false) {
         self.on = on.map(OnState.init(on:))
@@ -30,7 +31,9 @@ public struct Command: Encodable, Hashable, Sendable {
         self.recall = recallScene ? Recall(action: "active") : nil
     }
 
-    public var isEmpty: Bool { on == nil && dimming == nil && color == nil && colorTemperature == nil && recall == nil }
+    public var isEmpty: Bool {
+        on == nil && dimming == nil && color == nil && colorTemperature == nil && recall == nil && gradient == nil
+    }
 
     /// Combines a waiting command with a newer one: the newer value wins for every field it sets, and nothing the
     /// older one asked for is lost. Colour and white temperature exclude each other, so the newer one wins there.
@@ -38,9 +41,11 @@ public struct Command: Encodable, Hashable, Sendable {
         var m = self
         if let v = newer.on { m.on = v }
         if let v = newer.dimming { m.dimming = v }
-        if let v = newer.color { m.color = v; m.colorTemperature = nil }
+        if let v = newer.color { m.color = v; m.colorTemperature = nil; m.gradient = nil }
         if let v = newer.colorTemperature { m.colorTemperature = v; m.color = nil }
         if let v = newer.recall { m.recall = v }
+        if let v = newer.gradient { m.gradient = v; m.colorTemperature = nil }
+        if newer.colorTemperature != nil { m.gradient = nil }
         return m
     }
 
