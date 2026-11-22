@@ -9,6 +9,13 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @State private var expanded: Set<String> = []
+    @State private var contentHeight: CGFloat = 300
+
+    /// Leave room for the menu bar, the panel's header and footer, and a margin at the bottom of the screen.
+    private var maxListHeight: CGFloat {
+        let screen = NSScreen.main?.visibleFrame.height ?? 900
+        return max(screen - 220, 240)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -59,10 +66,12 @@ struct MenuBarView: View {
                 section("Zones", store.zones)
             }
             .padding(.bottom, 4)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
         .scrollIndicators(.automatic)
-        .frame(maxHeight: 560)
-        .fixedSize(horizontal: false, vertical: true)
+        // The panel grows with its content (opening a room makes it taller) up to what fits on the screen;
+        // beyond that the list scrolls.
+        .frame(height: min(max(contentHeight, 1), maxListHeight))
     }
 
     @ViewBuilder
