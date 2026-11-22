@@ -100,3 +100,7 @@ If something fails:
 ## For developers
 
 Run the tests with `swift test`. Read `CLAUDE.md` for the layout and the reasons behind the main decisions. All Hue logic lives in `Sources/HueKit` (no UI, unit-tested); the app is in `Sources/MacHueControl`.
+
+## Licence
+
+MIT: you are free to use, copy, change and share this software, as long as the licence text stays with it. See `LICENSE`.
