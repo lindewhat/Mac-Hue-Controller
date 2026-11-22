@@ -43,7 +43,7 @@ public enum Topology {
             }
             var seen = Set<String>()
             let lights = ids.filter { lightsByID[$0] != nil && seen.insert($0).inserted }
-                .sorted { byName(lightsByID[$0]!.name, lightsByID[$1]!.name) }
+                .sorted { LightOrder.areInIncreasingOrder(lightsByID[$0]!.name, lightsByID[$1]!.name) }
             let scenes = s.scenes.filter { $0.group.rid == area.id }
                 .sorted { byName($0.name, $1.name) }
                 .map(\.id)

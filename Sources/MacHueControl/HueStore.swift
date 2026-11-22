@@ -248,6 +248,7 @@ final class HueStore {
                 switch update.type {
                 case "light":
                     guard let state = lightStates[update.id] else { needsRefresh = true; continue }
+                    if update.metadata != nil { needsRefresh = true } // renamed: its place in the list may change
                     // Updates only list what changed, so build on the newest known bridge state.
                     let base = heldTruth[update.id] ?? state.light
                     receive(update.applied(to: base), into: state)
