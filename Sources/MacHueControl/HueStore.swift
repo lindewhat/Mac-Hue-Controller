@@ -371,57 +371,20 @@ final class HueStore {
         sendWhole(Command(on: on), to: group)
     }
 
-    func setBrightness(_ value: Double, for group: LightGroup) {
-        let v = min(max(value.rounded(), 1), 100)
-        adjust(group, supports: \.supportsDimming,
-               change: { $0.dimming?.brightness = v },
-               command: { _ in Command(brightness: v) })
-    }
+    func setBrightness(_ value: Double, for group: LightGroup) { adjust(group, .brightness(value)) }
+    func setColor(_ xy: XY, for group: LightGroup) { adjust(group, .color(xy)) }
+    func setMirek(_ mirek: Int, for group: LightGroup) { adjust(group, .mirek(mirek)) }
 
-    func setColor(_ xy: XY, for group: LightGroup) {
-        adjust(group, supports: \.supportsColor,
-               change: { l in
-                   let gamut = l.color?.gamut ?? .c
-                   l.color?.xy = ColorConversion.clamp(xy, to: gamut)
-                   l.colorTemperature?.mirek = nil
-                   l.colorTemperature?.mirekValid = false
-               },
-               command: { l in Command(xy: ColorConversion.clamp(xy, to: l.color?.gamut ?? .c)) })
-    }
-
-    func setMirek(_ mirek: Int, for group: LightGroup) {
-        func fitted(_ l: Light) -> Int {
-            let s = l.colorTemperature?.mirekSchema ?? .standard
-            return min(max(mirek, s.mirekMinimum), s.mirekMaximum)
-        }
-        adjust(group, supports: \.supportsWhiteTemperature,
-               change: { l in
-                   let m = fitted(l)
-                   l.colorTemperature?.mirek = m
-                   l.colorTemperature?.mirekValid = true
-               },
-               command: { l in Command(mirek: fitted(l)) })
-    }
-
-    /// Brightness, colour or white for a room. Never switches anything on or off: only the on/off switches do that.
-    /// - room on: only the lights that are on change; lights that are off stay off and keep their setting.
-    /// - room completely off: every light's setting changes, but they all stay off (it shows when they're turned on).
-    /// Lights get the change one by one (sharing the bridge's speed limit). Only when a big room is entirely on
-    /// does it go as one whole-room command, which the bridge handles better for many lights.
-    private func adjust(_ group: LightGroup, supports: (Light) -> Bool,
-                        change: (inout Light) -> Void, command: (Light) -> Command) {
-        let all = lights(in: group)
-        let capable = all.filter(supports)
-        guard !capable.isEmpty else { return }
-        let lit = capable.filter(\.on.on)
-        let targets = lit.isEmpty ? capable : lit
-
-        for l in targets { self.change(l.id) { change(&$0) } }
-        let everythingOn = all.allSatisfy(\.on.on) && lit.count == capable.count
-        if everythingOn && lit.count > 4, group.groupedLightID != nil {
-            sendWhole(command(lit[0]), to: group)
+    /// Brightness, colour or white for a room. What changes is decided by `RoomAdjust` (tested in HueKit):
+    /// only lights that are on, never switching anything on.
+    private func adjust(_ group: LightGroup, _ setting: RoomAdjust.Setting) {
+        let plan = RoomAdjust.plan(setting, lights: lights(in: group), roomCommandAvailable: group.groupedLightID != nil)
+        guard let first = plan.changes.first else { return }
+        for c in plan.changes { change(c.lightID) { $0 = $0.applying(c.command) } }
+        if plan.asWholeRoom {
+            sendWhole(first.command, to: group)
         } else {
-            for l in targets { enqueue(command(l), Target(.light, l.id)) }
+            for c in plan.changes { enqueue(c.command, Target(.light, c.lightID)) }
         }
     }
 
@@ -467,7 +430,7 @@ final class HueStore {
         for (id, state) in lightStates { current[id] = state.light }
         let changes = SceneApply.changes(for: scene, lights: current)
         for change in changes {
-            self.change(change.lightID, keepScene: true) { $0 = SceneApply.preview($0, after: change.command) }
+            self.change(change.lightID, keepScene: true) { $0 = $0.applying(change.command) }
             enqueue(change.command, Target(.light, change.lightID))
         }
         chosenScene[scene.group.rid] = scene.id

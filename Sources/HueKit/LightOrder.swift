@@ -26,11 +26,11 @@ public enum LightOrder {
     static func key(_ name: String) -> (base: String, rank: Int?) {
         let words = name.split(whereSeparator: { $0 == " " || $0 == "," || $0 == "-" || $0 == "(" || $0 == ")" || $0 == "/" })
             .map(String.init)
-        guard words.count >= 2 else { return (name.lowercased(), nil) }
-        if let rank = rank(of: words.last!) {
+        guard words.count >= 2, let first = words.first, let last = words.last else { return (name.lowercased(), nil) }
+        if let rank = rank(of: last) {
             return (words.dropLast().joined(separator: " ").lowercased(), rank)
         }
-        if let rank = rank(of: words.first!) {
+        if let rank = rank(of: first) {
             return (words.dropFirst().joined(separator: " ").lowercased(), rank)
         }
         return (name.lowercased(), nil)

@@ -35,21 +35,4 @@ public enum SceneApply {
             return c.isEmpty ? nil : Change(lightID: light.id, command: c)
         }
     }
-
-    /// What a light will look like after the change (shown at once, before the bridge confirms).
-    public static func preview(_ light: Light, after c: Command) -> Light {
-        var l = light
-        if let on = c.on { l.on = on }
-        if let b = c.dimming?.brightness { l.dimming?.brightness = b }
-        if let xy = c.color?.xy ?? c.gradient?.points.first?.color.xy {
-            l.color?.xy = xy
-            l.colorTemperature?.mirek = nil
-            l.colorTemperature?.mirekValid = false
-        }
-        if let m = c.colorTemperature?.mirek {
-            l.colorTemperature?.mirek = m
-            l.colorTemperature?.mirekValid = true
-        }
-        return l
-    }
 }

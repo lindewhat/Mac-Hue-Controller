@@ -1,7 +1,7 @@
 # Mac Hue Control
 
 ## What this app does
-A macOS menu bar app for controlling Philips Hue lights directly over the local network.
+A macOS menu bar app for controlling Philips Hue lights directly over the local network. For the owner's own home first; built so others can install it too. It deliberately does not do bridge setup, adding lights, editing rooms/scenes or remote (away-from-home) control: the Hue phone app does those.
 - Menu bar panel: every room and zone with an on/off switch and brightness slider; open one to see its scenes and single lights.
 - Window ("Open Hue Control…"): rooms/zones sidebar; detail with switch, brightness, colour wheel / white temperature, scenes, and each light (click its colour dot for colour/white).
 - First launch: the window opens by itself to find the bridge and pair (press the link button).
@@ -15,6 +15,7 @@ Tests only: `swift test`.
 
 ## Layout
 - `Sources/HueKit`: all Hue logic, no UI, unit-tested: discovery, pairing, certificate trust, Keychain, models, client, event-stream parser, command queue, topology (rooms/zones -> lights), colour maths.
+- Rules the owner decided live in HueKit and are tested: room adjustments (`RoomAdjust`: off lights stay off, nothing switches on), scenes (`SceneApply`), light order (`LightOrder`). `HueStore` only applies their plans.
 - `Sources/MacHueControl`: the SwiftUI app. `HueStore` holds the live state and sends changes; `MenuBarView`, `MainWindow`, `SetupView`, `SettingsView`; shared controls in `Controls.swift`.
 - Bundle id: `com.lindewhat.mac-hue-control`. Info.plist in `Resources/`.
 - App icon: `Resources/AppIcon.icns`, drawn by `swift scripts/make-icon.swift` (rerun only to change the design).
@@ -25,8 +26,9 @@ Tests only: `swift test`.
 - Clicks are never dropped: no "busy" guards. Every change goes through one ordered pipe into `CommandQueue`, which keeps one lane per light/room/scene, sends the first command at once and merges later ones (newest value wins, nothing asked for is lost). Gaps: ~110 ms per light, ~1 s per room/zone (the bridge's limits). A "busy" answer (429) is retried.
 - Switches decide from the real state in the store (`!isOn`), never from the control's own value. A room is "on" if any light in it is on; no half-on state.
 - Sliders never jump under the finger: while dragging they show the user's value and send whole numbers only; after release the store's shield keeps the value until the bridge has caught up.
+- Never crash on bridge data: no force-unwraps, a time limit on every request, lenient decoding (one odd resource never hides the rest), a plain message for every failure.
 - The bridge is the source of truth: optimistic updates, then live events confirm; any failed change re-reads everything; the panel re-reads when opened if older than 5 s; the stream reconnects with growing pauses and re-reads after reconnecting.
-- Brightness, warmth and colour never switch a light on or off; only the on/off switches do. For a room they change only the lights that are on; if the whole room is off they change every light's setting but leave them off (the bridge stores it for when they're turned on; verified on a real bridge). Lit lights get per-light commands; a big room (>4 lights) that is entirely on gets one `grouped_light` command. All light commands share one ~10/s budget in `CommandQueue`.
+- Brightness, warmth and colour never switch a light on or off; only the on/off switches do (`RoomAdjust`, tested). For a room they change only the lights that are on; if the whole room is off they change every light's setting but leave them off (the bridge stores it for when they're turned on; verified on a real bridge). Lit lights get per-light commands; a big room (>4 lights) that is entirely on gets one `grouped_light` command. All light commands share one ~10/s budget in `CommandQueue`.
 - Scenes (`SceneApply`): the bridge's own scene recall switches every light on, so the app instead reads the scene's per-light settings and sends them only to lights that are on (brightness, colour/gradient or white; never `on: true`; a scene may switch a lit light off). If the whole room is off, the settings are stored on the lights but they stay off. Because the bridge then doesn't mark the scene active, the store remembers the chosen scene per room (`chosenScene`) until a light there is changed in the app; not kept across restarts. Effects (candle, fire) and moving "dynamic" scenes aren't reproduced. Verified on a real bridge.
 - Shields (HueStore): for 3 s after a light is changed here, the bridge's reports for it are held back, then the latest one is applied. This stops switches and sliders flicking back to in-between values the bridge reports late.
 - Light order (`LightOrder`): natural numbers/letters, and lights that differ only by a position word follow the position (up→middle→down, left→middle→right, front→back, first→second, one→two; English and Danish). Renaming a light re-reads so it re-sorts.
@@ -41,3 +43,12 @@ Tests only: `swift test`.
 - build.sh assembles the app in $TMPDIR (not the Desktop folder): iCloud/Finder markings there break code signing. It signs with a stable identity (Apple Development) so the Keychain doesn't ask again after every rebuild, and verifies the signature after installing.
 - Privacy: only LAN traffic to the bridge. No analytics, no cloud calls (the meethue.com discovery service is deliberately not used), no logging of room/light names or IPs.
 - Sharing later (not done): paid Apple Developer Program, Developer ID signing, Hardened Runtime, notarization.
+
+## If someone asks you to install this app
+Follow the "For Claude: installing this for someone" section of `README.md`. It is the single source of truth; keep it in step with `build.sh`.
+
+## Must work on any Mac
+- Apple Silicon, macOS 15 or newer, Xcode installed (build.sh checks all three and says what to do).
+- Nothing tied to one home: no hard-coded bridge address, room or light names. The bridge is found automatically, or its address typed in.
+- First launch walks through finding the bridge and pressing its link button; Local Network permission denied, bridge not found and bridge unreachable each get a plain message and a button. Never fails silently.
+- Works with any mix of Hue lights: white-only bulbs, colour bulbs, gradient strips and smart plugs (on/off only).

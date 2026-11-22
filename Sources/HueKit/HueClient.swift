@@ -46,7 +46,7 @@ public final class HueClient: Sendable {
     }
 
     public func list<T: Decodable>(_ type: String) async throws -> [T] {
-        let data = try await perform(request(path: "/clip/v2/resource/\(type)"))
+        let data = try await perform(try request(path: "/clip/v2/resource/\(type)"))
         do {
             return try JSON.decoder().decode(Envelope<T>.self, from: data).data
         } catch {
@@ -57,7 +57,7 @@ public final class HueClient: Sendable {
     // MARK: Changing
 
     public func send(_ command: Command, to target: Target) async throws {
-        var req = request(path: "/clip/v2/resource/\(target.kind.rawValue)/\(target.id)")
+        var req = try request(path: "/clip/v2/resource/\(target.kind.rawValue)/\(target.id)")
         req.httpMethod = "PUT"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try command.json()
@@ -70,7 +70,7 @@ public final class HueClient: Sendable {
     /// (a good moment to re-read everything, so nothing that happened while disconnected is missed).
     public func listen(onConnected: @Sendable () async -> Void,
                        onEvents: @Sendable ([HueEvent]) async -> Void) async throws {
-        var req = request(path: "/eventstream/clip/v2")
+        var req = try request(path: "/eventstream/clip/v2")
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         req.timeoutInterval = 60 * 60
         let bytes: URLSession.AsyncBytes
@@ -103,8 +103,10 @@ public final class HueClient: Sendable {
 
     // MARK: Plumbing
 
-    private func request(path: String) -> URLRequest {
-        var req = URLRequest(url: URL(string: "https://\(host)\(path)")!)
+    private func request(path: String) throws -> URLRequest {
+        // A bad address gives a clear message instead of a crash.
+        guard let url = URL(string: "https://\(host)\(path)") else { throw HueError.notABridge }
+        var req = URLRequest(url: url)
         req.setValue(appKey, forHTTPHeaderField: "hue-application-key")
         return req
     }

@@ -5,6 +5,18 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Preflight: stop early with a plain message instead of a cryptic compiler error.
+stop() { echo "\nCannot continue: $1\n" >&2; exit 1 }
+[[ "$(uname -m)" == "arm64" ]] || stop "Mac Hue Control needs a Mac with Apple Silicon (M1 or newer)."
+(( $(sw_vers -productVersion | cut -d. -f1) >= 15 )) || stop "Mac Hue Control needs macOS 15 (Sequoia) or newer.
+  Update macOS in System Settings > General > Software Update, then run ./build.sh again."
+xcodebuild -version >/dev/null 2>&1 || stop "Xcode is not ready.
+  1. Install Xcode from the App Store (it's free; the download is large).
+  2. Open Xcode once and accept the licence.
+  3. Run ./build.sh again.
+  If Xcode is already installed, run this in Terminal, then try again:
+     sudo xcode-select -s /Applications/Xcode.app"
+
 APP_NAME="Mac Hue Control"
 DEST="/Applications/$APP_NAME.app"
 # Assemble outside the Desktop/iCloud folders: they add hidden markings that break code signing.
@@ -12,7 +24,12 @@ BUILD_DIR="${TMPDIR:-/tmp}/mac-hue-control-build"
 APP="$BUILD_DIR/$APP_NAME.app"
 
 echo "Running tests..."
-swift test 2>&1 | tail -3
+# A broken build must never be installed over a working one.
+if ! swift test > "${TMPDIR:-/tmp}/mac-hue-control-tests.log" 2>&1; then
+  tail -30 "${TMPDIR:-/tmp}/mac-hue-control-tests.log"
+  stop "some tests failed (shown above), so nothing was installed."
+fi
+tail -1 "${TMPDIR:-/tmp}/mac-hue-control-tests.log"
 
 echo "Building..."
 swift build -c release --arch arm64
