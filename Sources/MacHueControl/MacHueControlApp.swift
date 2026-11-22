@@ -1,8 +1,21 @@
 import AppKit
 import SwiftUI
 
+extension Notification.Name {
+    static let openMainWindow = Notification.Name("MacHueControl.openMainWindow")
+}
+
+/// Opening the app again (from Finder, Spotlight or Launchpad) while it already runs in the menu bar shows the window.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows { NotificationCenter.default.post(name: .openMainWindow, object: nil) }
+        return true
+    }
+}
+
 @main
 struct MacHueControlApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store = HueStore()
 
     var body: some Scene {
@@ -10,8 +23,7 @@ struct MacHueControlApp: App {
         MenuBarExtra {
             MenuBarView().environment(store)
         } label: {
-            Image(systemName: menuIcon)
-                .accessibilityLabel("Mac Hue Control")
+            MenuBarIcon(store: store)
         }
         .menuBarExtraStyle(.window)
 
@@ -26,8 +38,23 @@ struct MacHueControlApp: App {
             SettingsView().environment(store)
         }
     }
+}
 
-    private var menuIcon: String {
+/// The menu bar icon. It is always on screen, so it is also what opens the window when the app is opened again.
+private struct MenuBarIcon: View {
+    let store: HueStore
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Image(systemName: name)
+            .accessibilityLabel("Mac Hue Control")
+            .onReceive(NotificationCenter.default.publisher(for: .openMainWindow)) { _ in
+                openWindow(id: "main")
+                NSApp.activate()
+            }
+    }
+
+    private var name: String {
         switch store.status {
         case .connected, .connecting, .notPaired:
             store.anyLightOn ? "lightbulb.fill" : "lightbulb"

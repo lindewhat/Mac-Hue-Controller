@@ -45,7 +45,7 @@ final class SetupModel {
     func pair(_ bridge: DiscoveredBridge, store: HueStore?) {
         if let store { self.store = store }
         work?.cancel()
-        step = .pressButton(bridge, secondsLeft: 60)
+        step = .pressButton(bridge, secondsLeft: 180)
         work = Task {
             do {
                 let credentials = try await BridgePairing.pair(host: bridge.host) { left in
@@ -110,7 +110,7 @@ struct SetupView: View {
                         Text("Press the round link button on top of your bridge.")
                             .font(.title3)
                         Text("\(bridge.name) · waiting \(left) s").foregroundStyle(.secondary).monospacedDigit()
-                        ProgressView(value: Double(left), total: 60).frame(width: 240)
+                        ProgressView(value: Double(left), total: 180).frame(width: 240)
                         Button("Cancel") { model.cancel(); model.search() }
                     }
                 case .failed(let text, let retry):

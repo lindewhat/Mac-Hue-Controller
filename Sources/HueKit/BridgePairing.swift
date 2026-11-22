@@ -23,7 +23,7 @@ public enum BridgePairing {
 
     /// Asks the bridge for an app key every 2 seconds until someone presses its link button, or until `seconds` pass.
     /// `secondsLeft` is called once a second so the window can show a countdown.
-    public static func pair(host: String, seconds: Int = 60,
+    public static func pair(host: String, seconds: Int = 180,
                             secondsLeft: @escaping @Sendable (Int) async -> Void = { _ in }) async throws -> PairedCredentials {
         let (session, trust) = makeSession(host: host)
         defer { session.finishTasksAndInvalidate() }
