@@ -403,36 +403,25 @@ final class HueStore {
                command: { l in Command(mirek: fitted(l)) })
     }
 
-    /// Brightness, colour or white for a room:
-    /// - room on: only the lights that are on change; lights that are off stay off.
-    /// - room completely off: the whole room turns on with the new setting.
-    /// Lights that are on get the change one by one (sharing the bridge's speed limit). Only when a big room is
-    /// entirely on does it go as one whole-room command, which the bridge handles better for many lights.
+    /// Brightness, colour or white for a room. Never switches anything on or off: only the on/off switches do that.
+    /// - room on: only the lights that are on change; lights that are off stay off and keep their setting.
+    /// - room completely off: every light's setting changes, but they all stay off (it shows when they're turned on).
+    /// Lights get the change one by one (sharing the bridge's speed limit). Only when a big room is entirely on
+    /// does it go as one whole-room command, which the bridge handles better for many lights.
     private func adjust(_ group: LightGroup, supports: (Light) -> Bool,
                         change: (inout Light) -> Void, command: (Light) -> Command) {
         let all = lights(in: group)
         let capable = all.filter(supports)
         guard !capable.isEmpty else { return }
         let lit = capable.filter(\.on.on)
+        let targets = lit.isEmpty ? capable : lit
 
-        if lit.isEmpty {
-            // The whole room was off: turn it on with this setting.
-            for l in all {
-                let fits = supports(l)
-                self.change(l.id) { if fits { change(&$0) }; $0.on.on = true }
-            }
-            var c = command(capable[0])
-            c.on = OnState(on: true)
-            sendWhole(c, to: group)
-            return
-        }
-
-        for l in lit { self.change(l.id) { change(&$0) } }
+        for l in targets { self.change(l.id) { change(&$0) } }
         let everythingOn = all.allSatisfy(\.on.on) && lit.count == capable.count
         if everythingOn && lit.count > 4, group.groupedLightID != nil {
             sendWhole(command(lit[0]), to: group)
         } else {
-            for l in lit { enqueue(command(l), Target(.light, l.id)) }
+            for l in targets { enqueue(command(l), Target(.light, l.id)) }
         }
     }
 
@@ -444,33 +433,32 @@ final class HueStore {
         enqueue(Command(on: on), Target(.light, light.id))
     }
 
-    /// Dragging one light's own slider turns that light on: you're clearly asking for it.
+    /// Brightness, colour and white never switch a light on or off; a light that's off keeps the new setting
+    /// for when it's turned on.
     func setBrightness(_ value: Double, for light: Light) {
         let v = min(max(value.rounded(), 1), 100)
-        change(light.id) { $0.on.on = true; $0.dimming?.brightness = v }
-        enqueue(Command(on: true, brightness: v), Target(.light, light.id))
+        change(light.id) { $0.dimming?.brightness = v }
+        enqueue(Command(brightness: v), Target(.light, light.id))
     }
 
     func setColor(_ xy: XY, for light: Light) {
         let clamped = ColorConversion.clamp(xy, to: light.color?.gamut ?? .c)
         change(light.id) { l in
-            l.on.on = true
             l.color?.xy = clamped
             l.colorTemperature?.mirek = nil
             l.colorTemperature?.mirekValid = false
         }
-        enqueue(Command(on: true, xy: clamped), Target(.light, light.id))
+        enqueue(Command(xy: clamped), Target(.light, light.id))
     }
 
     func setMirek(_ mirek: Int, for light: Light) {
         let schema = light.colorTemperature?.mirekSchema ?? .standard
         let m = min(max(mirek, schema.mirekMinimum), schema.mirekMaximum)
         change(light.id) { l in
-            l.on.on = true
             l.colorTemperature?.mirek = m
             l.colorTemperature?.mirekValid = true
         }
-        enqueue(Command(on: true, mirek: m), Target(.light, light.id))
+        enqueue(Command(mirek: m), Target(.light, light.id))
     }
 
     func recall(_ scene: Scene) {
