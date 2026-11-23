@@ -8,7 +8,7 @@ import Synchronization
 /// remembers the exact certificate the bridge showed when it was paired (pressing the link button proves it's your
 /// bridge) and from then on only accepts that one certificate, and only from the bridge's address. Other websites
 /// get the normal checks.
-public final class BridgeTrust: NSObject, URLSessionDelegate, Sendable {
+public final class BridgeTrust: NSObject, URLSessionTaskDelegate, Sendable {
     private struct State {
         var pinned: String?
         var seen: String?
@@ -29,6 +29,12 @@ public final class BridgeTrust: NSObject, URLSessionDelegate, Sendable {
 
     /// True once the bridge showed a different certificate from the remembered one.
     public var sawMismatch: Bool { state.withLock { $0.mismatch } }
+
+    /// The live update stream asks per request rather than per session; it gets the same answer.
+    public func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
+                           completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+    }
 
     public func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
                            completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
