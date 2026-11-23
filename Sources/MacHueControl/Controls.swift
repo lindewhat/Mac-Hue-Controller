@@ -258,29 +258,6 @@ struct ColorControls: View {
     }
 }
 
-/// The see-through grey background macOS uses for its own menus (like the Wi-Fi menu). It also makes the panel's
-/// window itself see-through, otherwise the window paints a solid dark colour behind it.
-struct NativeMenuBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = SeeThroughEffectView()
-        view.material = .menu
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
-
-    private final class SeeThroughEffectView: NSVisualEffectView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard let window else { return }
-            window.isOpaque = false
-            window.backgroundColor = .clear
-        }
-    }
-}
-
 /// Lays out items left to right and wraps onto a new line when the row is full (used for scene buttons, so none
 /// are cut off at the panel's edge).
 struct FlowLayout: Layout {

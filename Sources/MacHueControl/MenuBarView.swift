@@ -38,7 +38,6 @@ struct MenuBarView: View {
             footer
         }
         .frame(width: 320)
-        .background(NativeMenuBackground())
         .onAppear { store.refreshIfStale() }
     }
 

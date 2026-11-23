@@ -41,6 +41,15 @@ cp "$BIN" "$APP/Contents/MacOS/MacHueControl"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
+# Stamp the SDK that really built the app. SwiftPM stamps the minimum (15.0) instead, and macOS then gives the
+# menu bar panel the older, nearly solid look. Must happen before signing, because it changes the file.
+SDK_VERSION="$(xcrun --show-sdk-version)"
+if vtool -set-build-version macos 15.0 "$SDK_VERSION" -replace -output "$BUILD_DIR/stamped" "$APP/Contents/MacOS/MacHueControl" 2>/dev/null; then
+  mv "$BUILD_DIR/stamped" "$APP/Contents/MacOS/MacHueControl"
+else
+  echo "NOTE: could not stamp the SDK version; the menu bar panel may look older than other menus."
+fi
+
 # Signing: a stable identity keeps the Keychain from asking for permission again after every rebuild.
 # Override with SIGN_IDENTITY="..." if needed. Prefers Apple Development, then a local cert.
 IDENTITY="${SIGN_IDENTITY:-}"
