@@ -1,4 +1,5 @@
 import AppKit
+import HueKit
 import ServiceManagement
 import SwiftUI
 
@@ -77,6 +78,7 @@ struct SettingsView: View {
             loginNote = LaunchAtLogin.needsApproval
                 ? "Approve Mac Hue Control under Login Items in System Settings." : nil
         } catch {
+            Log.error("settings", "Open when I log in could not be changed: \(Log.describe(error)); user sees a note")
             loginNote = "Couldn't change this setting. It only works when the app is in your Applications folder."
         }
         launchAtLogin = LaunchAtLogin.isOn

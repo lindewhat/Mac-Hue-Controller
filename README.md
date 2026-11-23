@@ -85,7 +85,7 @@ If a person asks you to help install this app, follow this. They may not be tech
 
 **To update an existing install** (the person says "update Mac Hue Control"): `cd ~/Mac-Hue-Controller`, run `git pull`, then `./build.sh`, and tell them it takes a few minutes. If `git pull` reports local changes, don't discard them; explain and ask. If they installed from a ZIP there's no git history: download the new ZIP and build from it.
 
-If something fails:
+If something fails, read the app's log first: `~/Library/Logs/Mac Hue Control/Mac Hue Control.log` (plain text; newest lines at the end; it never contains addresses or names). Then:
 
 | What they see | Cause and fix |
 |---|---|

@@ -21,7 +21,7 @@ final class LightState {
 /// showing the real state.
 @MainActor @Observable
 final class HueStore {
-    enum Status: Equatable {
+    enum Status: Hashable {
         case notPaired, connecting, connected, unreachable, localNetworkDenied, certificateChanged, notAuthorized
     }
 
@@ -42,6 +42,8 @@ final class HueStore {
     @ObservationIgnored private var refreshSoonTask: Task<Void, Never>?
     @ObservationIgnored private var lastRelocate: ContinuousClock.Instant?
     @ObservationIgnored private var pendingKey: String?
+    /// Connection problems already logged since the last good connection, so retries don't repeat them in the log.
+    @ObservationIgnored private var loggedProblems: Set<Status> = []
 
     // Shields: lights changed here recently, and the bridge's latest word on them, held back until the shield ends.
     @ObservationIgnored private var shieldUntil: [String: ContinuousClock.Instant] = [:]
@@ -68,7 +70,9 @@ final class HueStore {
     func didPair(_ found: DiscoveredBridge, credentials: PairedCredentials) async {
         var name = found.name
         if let probed = try? await BridgePairing.probe(host: found.host) { name = probed.name }
+        Log.info("setup", "paired with a bridge")
         if !Keychain.save(credentials.appKey, account: found.id) {
+            Log.error("setup", "could not save the app key in the Keychain; user sees a warning")
             message = "Couldn't save the bridge's key in the Keychain. You may need to set it up again after a restart."
         }
         pendingKey = credentials.appKey
@@ -78,6 +82,7 @@ final class HueStore {
 
     /// Forgets the bridge (for "Set up again").
     func forget() {
+        Log.info("setup", "bridge forgotten (set up again)")
         disconnect()
         if let bridge { Keychain.delete(account: bridge.id) }
         UserDefaults.standard.removeObject(forKey: Self.bridgeKey)
@@ -112,7 +117,7 @@ final class HueStore {
         // Changes go through one ordered pipe into the command queue, so clicks reach the bridge in the order made.
         let queue = CommandQueue(
             send: { target, command in try await client.send(command, to: target) },
-            onError: { [weak self] _, error in await self?.commandFailed(error, generation: gen) })
+            onError: { [weak self] target, error in await self?.commandFailed(target, error, generation: gen) })
         let (stream, continuation) = AsyncStream<(Target, Command)>.makeStream()
         outbox = continuation
         tasks.append(Task {
@@ -147,10 +152,11 @@ final class HueStore {
                     onConnected: { [weak self] in await self?.refresh() },
                     onEvents: { [weak self] events in await self?.apply(events, generation: gen) })
             } catch {
+                // HueClient has logged why the live updates stopped; here it only matters whether to keep trying.
                 guard gen == generation else { return }
                 let hue = HueError.from(error)
                 if hue == .certificateChanged || hue == .notAuthorized {
-                    fail(with: hue)
+                    fail(with: hue, cause: error, during: "live updates")
                     return
                 }
             }
@@ -172,6 +178,11 @@ final class HueStore {
             let snapshot = try await client.snapshot()
             guard gen == generation else { return }
             apply(snapshot)
+            if status != .connected {
+                Log.info("bridge", "connected: \(lightStates.count) lights, \(rooms.count) rooms, "
+                    + "\(zones.count) zones, \(scenes.count) scenes")
+            }
+            loggedProblems = []
             status = .connected
             lastRefresh = .now
             if bridge?.certificateHash == nil, var b = bridge, let seen = client.seenCertificateHash {
@@ -180,7 +191,7 @@ final class HueStore {
             }
         } catch {
             guard gen == generation else { return }
-            fail(with: HueError.from(error))
+            fail(with: HueError.from(error), cause: error, during: "reading from the bridge")
         }
     }
 
@@ -268,14 +279,18 @@ final class HueStore {
         if needsRefresh { refreshSoon() }
     }
 
-    private func fail(with error: HueError) {
-        switch error {
-        case .certificateChanged: status = .certificateChanged
-        case .notAuthorized: status = .notAuthorized
-        default:
-            status = .unreachable
-            Task { await relocate() }
+    /// Shows a problem with the connection. Logged once when it starts, not on every retry.
+    private func fail(with error: HueError, cause: Error, during action: String) {
+        let new: Status = switch error {
+        case .certificateChanged: .certificateChanged
+        case .notAuthorized: .notAuthorized
+        default: .unreachable
         }
+        if loggedProblems.insert(new).inserted {
+            Log.error("bridge", "\(action) failed: \(Log.describe(cause)); user sees: \(error.logKind)")
+        }
+        status = new
+        if new == .unreachable { Task { await relocate() } }
     }
 
     /// If the bridge got a new address from the router, find it again by its id and reconnect.
@@ -286,8 +301,12 @@ final class HueStore {
         let result = await BridgeDiscovery().discover()
         guard self.bridge?.id == bridge.id, status != .connected else { return }
         if result.localNetworkDenied {
+            if loggedProblems.insert(.localNetworkDenied).inserted {
+                Log.error("bridge", "Local Network access is off; user sees the Local Network message")
+            }
             status = .localNetworkDenied
         } else if let found = result.bridges.first(where: { $0.id == bridge.id }), found.host != bridge.host {
+            Log.info("bridge", "the bridge has a new address; reconnecting")
             var moved = bridge
             moved.host = found.host
             save(moved)
@@ -295,12 +314,14 @@ final class HueStore {
         }
     }
 
-    private func commandFailed(_ error: Error, generation gen: Int) async {
+    private func commandFailed(_ target: Target, _ error: Error, generation gen: Int) async {
         guard gen == generation else { return }
         let hue = HueError.from(error)
         if hue == .certificateChanged || hue == .notAuthorized || hue == .unreachable {
-            fail(with: hue)
+            fail(with: hue, cause: error, during: "changing \(Log.label(target))")
         } else {
+            Log.error("command", "changing \(Log.label(target)) failed: \(Log.describe(error)); "
+                + "user sees: \(hue.logKind)")
             message = hue.localizedDescription
         }
         // Put back what's really true: drop the shields so the fresh read shows at once.

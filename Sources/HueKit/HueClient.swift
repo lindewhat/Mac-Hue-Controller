@@ -46,10 +46,11 @@ public final class HueClient: Sendable {
     }
 
     public func list<T: Decodable>(_ type: String) async throws -> [T] {
-        let data = try await perform(try request(path: "/clip/v2/resource/\(type)"))
+        let data = try await perform(try request(path: "/clip/v2/resource/\(type)"), what: "read \(type)")
         do {
             return try JSON.decoder().decode(Envelope<T>.self, from: data).data
         } catch {
+            Log.error("bridge", "read \(type): answer not understood")
             throw HueError.unexpectedAnswer
         }
     }
@@ -61,7 +62,7 @@ public final class HueClient: Sendable {
         req.httpMethod = "PUT"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try command.json()
-        _ = try await perform(req)
+        _ = try await perform(req, what: "\(Log.label(target)) (\(command.fieldNames))")
     }
 
     // MARK: Live updates
@@ -78,9 +79,11 @@ public final class HueClient: Sendable {
         do {
             (bytes, response) = try await streamSession.bytes(for: req)
         } catch {
+            Log.debug("bridge", "live updates: could not open: \(Log.describe(error))")
             throw mapped(error)
         }
-        try check(response, data: Data())
+        try check(response, data: Data(), what: "live updates")
+        Log.debug("bridge", "live updates: open")
         await onConnected()
 
         var parser = EventStreamParser()
@@ -97,8 +100,10 @@ public final class HueClient: Sendable {
                 if !events.isEmpty { await onEvents(events) }
             }
         } catch {
+            if !(error is CancellationError) { Log.warn("bridge", "live updates stopped: \(Log.describe(error))") }
             throw mapped(error)
         }
+        Log.warn("bridge", "live updates ended by the bridge")
     }
 
     // MARK: Plumbing
@@ -111,19 +116,26 @@ public final class HueClient: Sendable {
         return req
     }
 
-    private func perform(_ req: URLRequest) async throws -> Data {
+    /// `what` names the request for the log ("read light", "light 3 (dimming)"); it never holds an address or id.
+    private func perform(_ req: URLRequest, what: String) async throws -> Data {
         let data: Data, response: URLResponse
+        let started = ContinuousClock.now
         do {
             (data, response) = try await session.data(for: req)
         } catch {
+            Log.debug("bridge", "\(what): \(Log.describe(error))")
             throw mapped(error)
         }
-        try check(response, data: data)
+        try check(response, data: data, what: what)
+        Log.debug("bridge", "\(what): ok in \(Int((ContinuousClock.now - started) / .milliseconds(1))) ms")
         return data
     }
 
-    private func check(_ response: URLResponse, data: Data) throws {
+    private func check(_ response: URLResponse, data: Data, what: String) throws {
         guard let http = response as? HTTPURLResponse else { throw HueError.unexpectedAnswer }
+        if !(200..<300).contains(http.statusCode) {
+            Log.warn("bridge", "\(what): HTTP \(http.statusCode)")
+        }
         switch http.statusCode {
         case 200..<300: return
         case 401, 403: throw HueError.notAuthorized

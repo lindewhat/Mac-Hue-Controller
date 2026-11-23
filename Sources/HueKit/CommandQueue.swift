@@ -80,6 +80,7 @@ public actor CommandQueue {
                 try await send(target, command)
             } catch HueError.rateLimited {
                 // The bridge asked us to slow down: keep the command (newer changes still win) and try again shortly.
+                Log.warn("command", "\(Log.label(target)): bridge busy, trying again in 1 s")
                 let newer = lanes[target]?.pending
                 lanes[target]?.pending = newer.map { command.merging($0) } ?? command
                 lanes[target]?.nextAllowed = .now + .seconds(1)

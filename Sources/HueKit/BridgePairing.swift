@@ -17,6 +17,7 @@ public enum BridgePairing {
             let config = try JSONDecoder().decode(Config.self, from: data)
             return DiscoveredBridge(id: config.bridgeid.lowercased(), name: config.name, host: host)
         } catch {
+            Log.warn("setup", "checking an address found no bridge: \(Log.describe(error))")
             throw HueError.notABridge
         }
     }
@@ -56,6 +57,7 @@ public enum BridgePairing {
         do {
             (data, _) = try await session.data(for: req)
         } catch {
+            Log.warn("setup", "pairing request failed: \(Log.describe(error))")
             throw HueError.unreachable
         }
         return try parsePairingAnswer(data)
@@ -68,6 +70,7 @@ public enum BridgePairing {
         if let key = first.success?.username { return key }
         if let error = first.error {
             if error.type == 101 { return nil } // link button not pressed yet
+            Log.warn("setup", "pairing refused by the bridge: Hue error type \(error.type)")
             throw HueError.bridgeSaid(error.description)
         }
         throw HueError.unexpectedAnswer

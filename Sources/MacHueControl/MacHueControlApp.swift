@@ -1,4 +1,5 @@
 import AppKit
+import HueKit
 import SwiftUI
 
 extension Notification.Name {
@@ -16,9 +17,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct MacHueControlApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var store = HueStore()
+    @State private var store: HueStore
 
-    var body: some Scene {
+    init() {
+        // The log starts before anything connects, so the first problem is already recorded.
+        // `--verbose` adds a line for every request (for chasing a rare fault).
+        let info = Bundle.main.infoDictionary
+        let version = "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        Log.start(verbose: CommandLine.arguments.contains("--verbose"),
+                  startLine: "Mac Hue Control \(version) started on macOS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)")
+        _store = State(initialValue: HueStore())
+    }
+
+    var body: some SwiftUI.Scene {
         // The menu bar icon and its panel. Filled bulb: some light is on. Outline: all off. Triangle: a problem.
         MenuBarExtra {
             MenuBarView().environment(store)

@@ -29,7 +29,9 @@ final class SetupModel {
                 result = await BridgeDiscovery().discover(maxWait: 8)
             }
             guard !Task.isCancelled else { return }
+            Log.info("setup", "search found \(result.bridges.count) bridge(s)")
             if result.localNetworkDenied {
+                Log.error("setup", "Local Network access is off; user sees the Local Network message")
                 step = .localNetworkDenied
             } else if result.bridges.count == 1 {
                 // Only one bridge: go straight to the link button.
@@ -57,6 +59,7 @@ final class SetupModel {
             } catch is CancellationError {
             } catch {
                 guard !Task.isCancelled else { return }
+                Log.error("setup", "pairing failed: \(Log.describe(error)); user sees: \(HueError.from(error).logKind)")
                 step = .failed(HueError.from(error).localizedDescription, retry: bridge)
             }
         }
@@ -73,6 +76,7 @@ final class SetupModel {
                 let bridge = try await BridgePairing.probe(host: address)
                 pair(bridge, store: store)
             } catch {
+                Log.warn("setup", "typed address: \(Log.describe(error)); user sees: \(HueError.from(error).logKind)")
                 addressProblem = HueError.from(error).localizedDescription
             }
         }
