@@ -10,7 +10,7 @@ Control your Philips Hue lights from the Mac menu bar: rooms, zones and single l
 
 Open Claude Code (or the Code tab in the Claude desktop app) and say:
 
-> Help me install https://github.com/lindewhat/Mac-hue-control
+> Help me install https://github.com/lindewhat/Mac-Hue-Controller
 
 Claude checks your Mac, does the technical steps itself, and tells you, one at a time, the few things only you can do (such as clicking **Allow** and pressing the button on your Hue Bridge). If you'd rather do it yourself, follow **Install** below.
 
@@ -77,13 +77,13 @@ If a person asks you to help install this app, follow this. They may not be tech
 1. **Check the Mac.** `uname -m` must print `arm64`. `sw_vers -productVersion` must be 15 or higher. If either fails, stop and explain plainly that this Mac can't run the app.
 2. **Check Xcode.** `xcodebuild -version` must succeed. If it doesn't, ask them to install Xcode from the App Store and open it once (step 1 above), and wait until they say it's done. If Xcode is installed but the check still fails, show them `sudo xcode-select -s /Applications/Xcode.app` to run themselves.
 3. **Ask about the bridge.** Confirm they have a square Hue Bridge set up with the Hue phone app, on the same network as this Mac. A round (first-generation) bridge won't work.
-4. **Get the code.** `git clone https://github.com/lindewhat/Mac-hue-control.git ~/Mac-hue-control`, then `cd` into it and read `CLAUDE.md`.
+4. **Get the code.** `git clone https://github.com/lindewhat/Mac-Hue-Controller.git ~/Mac-Hue-Controller`, then `cd` into it and read `CLAUDE.md`.
 5. **Optional signing certificate.** Run `security find-identity -v -p codesigning`. If it finds no "Apple Development" identity, explain step 2 above and offer it as optional. Without it, macOS asks about the Keychain after each update.
 6. **Build and install.** Run `./build.sh` (it takes a few minutes; run it in the background and say so). It ends with "Installed and verified" and opens the app.
 7. **Permissions and pairing, one at a time.** First, macOS asks to find devices on the local network: they click **Allow**. Then the window shows "Press the round link button on top of your bridge": they press it (they have 3 minutes).
 8. **Test with them.** Ask them to click the light bulb in the menu bar and flip one room's switch, and to confirm the real lights changed.
 
-**To update an existing install** (the person says "update Mac Hue Control"): `cd ~/Mac-hue-control`, run `git pull`, then `./build.sh`, and tell them it takes a few minutes. If `git pull` reports local changes, don't discard them; explain and ask. If they installed from a ZIP there's no git history: download the new ZIP and build from it.
+**To update an existing install** (the person says "update Mac Hue Control"): `cd ~/Mac-Hue-Controller`, run `git pull`, then `./build.sh`, and tell them it takes a few minutes. If `git pull` reports local changes, don't discard them; explain and ask. If they installed from a ZIP there's no git history: download the new ZIP and build from it.
 
 If something fails:
 
