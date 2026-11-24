@@ -1,11 +1,15 @@
 import Foundation
 
-/// Applies a scene only to the lights that are on.
+/// Applies a scene's look (colour, white warmth or gradient) to the lights that are on.
 ///
-/// The bridge's own "recall scene" switches on every light in the scene. Instead, this reads the scene's setting for
-/// each light and sends it straight to that light, but only to lights that are on; lights that are off stay off.
-/// If every light in the scene is off, each one gets the scene's setting stored but stays off (just like dragging
-/// brightness on an off room), so it shows the scene when switched on.
+/// The rules (the owner's, so they are tested):
+/// - A scene changes only how a light looks: its colour, its white warmth, or its gradient.
+/// - It never changes a light's brightness and never switches a light on or off, whatever the scene says.
+/// - Only lights that are on change; lights that are off stay off and untouched. If every light in the scene is off,
+///   each one gets the look stored but stays off, so it shows the scene's look when switched on.
+/// - Colours are fitted to what each light can show; white-only bulbs get only the warmth; gradient lights get the
+///   gradient.
+/// - No "recall" command is sent: the bridge's own recall switches lights on and sets their brightness.
 public enum SceneApply {
     public struct Change: Equatable, Sendable {
         public var lightID: String
@@ -20,19 +24,34 @@ public enum SceneApply {
         let anyOn = steps.contains { $0.0.on.on }
         return steps.compactMap { light, values in
             if anyOn && !light.on.on { return nil } // off stays off, untouched
-            var c = Command()
-            // A scene can switch a lit light off; it never switches one on.
-            if light.on.on, values.on?.on == false { c.on = OnState(on: false) }
-            if light.supportsDimming, let b = values.dimming?.brightness { c.dimming = .init(brightness: max(b, 1)) }
-            if light.supportsColor, let g = values.gradient, !g.points.isEmpty {
-                c.gradient = g
-            } else if light.supportsColor, let xy = values.color?.xy {
-                c.color = .init(xy: ColorConversion.clamp(xy, to: light.color?.gamut ?? .c))
-            } else if light.supportsWhiteTemperature, let m = values.colorTemperature?.mirek {
-                let s = light.colorTemperature?.mirekSchema ?? .standard
-                c.colorTemperature = .init(mirek: min(max(m, s.mirekMinimum), s.mirekMaximum))
-            }
+            let c = look(values, for: light)
             return c.isEmpty ? nil : Change(lightID: light.id, command: c)
+        }
+    }
+
+    /// Only the look: `on` and `dimming` are never set here.
+    private static func look(_ values: SceneAction.Values, for light: Light) -> Command {
+        var c = Command()
+        if light.supportsColor, let g = values.gradient, !g.points.isEmpty {
+            c.gradient = g
+        } else if light.supportsColor, let xy = values.color?.xy {
+            c.color = .init(xy: ColorConversion.clamp(xy, to: light.color?.gamut ?? .c))
+        } else if light.supportsWhiteTemperature, let m = values.colorTemperature?.mirek {
+            let s = light.colorTemperature?.mirekSchema ?? .standard
+            c.colorTemperature = .init(mirek: min(max(m, s.mirekMinimum), s.mirekMaximum))
+        }
+        return c
+    }
+}
+
+extension Scene {
+    /// True when the scene has a look to apply: a colour, a white warmth or a gradient for at least one light.
+    /// A scene that only sets brightness or on/off has nothing the app applies, so it isn't offered.
+    public var changesLook: Bool {
+        (actions ?? []).contains { a in
+            a.action.color != nil
+                || a.action.colorTemperature?.mirek != nil
+                || !(a.action.gradient?.points.isEmpty ?? true)
         }
     }
 }

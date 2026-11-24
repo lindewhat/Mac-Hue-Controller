@@ -356,7 +356,8 @@ final class HueStore {
 
     func light(_ id: String) -> Light? { lightStates[id]?.light }
     func lights(in group: LightGroup) -> [Light] { group.lightIDs.compactMap { lightStates[$0]?.light } }
-    func scenes(in group: LightGroup) -> [Scene] { group.sceneIDs.compactMap { scenes[$0] } }
+    /// Only scenes with a look (colour, warmth or gradient) to apply, so no button does nothing.
+    func scenes(in group: LightGroup) -> [Scene] { group.sceneIDs.compactMap { scenes[$0] }.filter(\.changesLook) }
 
     /// A room counts as on when any of its lights is on (no half-on state, so a click always does the obvious thing).
     func isOn(_ group: LightGroup) -> Bool { lights(in: group).contains { $0.on.on } }
@@ -445,11 +446,13 @@ final class HueStore {
         enqueue(Command(mirek: m), Target(.light, light.id))
     }
 
-    /// Puts a scene's settings on the lights that are on; lights that are off stay off (see SceneApply).
+    /// Puts a scene's look (colour, warmth, gradient) on the lights that are on; brightness and on/off never change
+    /// (see SceneApply).
     func recall(_ scene: Scene) {
         var current: [String: Light] = [:]
         for (id, state) in lightStates { current[id] = state.light }
         let changes = SceneApply.changes(for: scene, lights: current)
+        guard !changes.isEmpty else { return } // nothing to apply here: don't mark it as chosen either
         for change in changes {
             self.change(change.lightID, keepScene: true) { $0 = $0.applying(change.command) }
             enqueue(change.command, Target(.light, change.lightID))
